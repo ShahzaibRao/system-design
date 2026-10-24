@@ -1,0 +1,50 @@
+{
+  "title": "Social Lab",
+  "uid": "social-lab",
+  "tags": ["social-lab"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 0,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Username checks per second by outcome",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "sum by (result) (rate(sociallab_username_check_total[1m]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 2,
+      "title": "Username checks total by outcome",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "sociallab_username_check_total", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 3,
+      "title": "Check duration p95",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(sociallab_username_check_duration_seconds_bucket[1m])))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 4,
+      "title": "Check duration count",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [{"expr": "sociallab_username_check_duration_seconds_count", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"tooltip": {"mode": "single"}}
+    }
+  ]
+}
