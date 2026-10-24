@@ -1,9 +1,12 @@
 import os
+import time
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 import bcrypt
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from .core.bloom import BloomFilter
 
 app = FastAPI(title="social-lab")
@@ -17,6 +20,16 @@ users_collection.create_index("username", unique=True)
 users_collection.create_index("email", unique=True)
 
 username_filter = BloomFilter(capacity=10000, error_rate=0.01)
+
+USERNAME_CHECK_TOTAL = Counter(
+    "sociallab_username_check_total",
+    "Username availability checks by outcome",
+    ["result"],
+)
+USERNAME_CHECK_DURATION = Histogram(
+    "sociallab_username_check_duration_seconds",
+    "Username availability check duration in seconds",
+)
 
 
 @app.on_event("startup")
@@ -44,11 +57,22 @@ def health():
     return {"status": "ok", "app": "social-lab"}
 
 
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/api/v1/auth/check-username")
 def check_username(username: str):
+    start_time = time.time()
     if FILTER_ENABLED and username not in username_filter:
+        USERNAME_CHECK_TOTAL.labels(result="filter_no_db").inc()
+        USERNAME_CHECK_DURATION.observe(time.time() - start_time)
         return {"username": username, "available": True}
     user = users_collection.find_one({"username": username})
+    result = "db_taken" if user else "db_available"
+    USERNAME_CHECK_TOTAL.labels(result=result).inc()
+    USERNAME_CHECK_DURATION.observe(time.time() - start_time)
     return {"username": username, "available": user is None}
 
 
