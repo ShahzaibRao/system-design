@@ -13,6 +13,9 @@ app = FastAPI(title="social-lab")
 
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 FILTER_ENABLED = os.environ.get("FILTER_ENABLED", "true").lower() == "true"
+RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() == "true"
+MAX_FAILED_ATTEMPTS = 5
+BLOCK_SECONDS = 60
 client = MongoClient(MONGO_URI)
 db = client["social_lab"]
 users_collection = db["users"]
@@ -20,6 +23,7 @@ users_collection.create_index("username", unique=True)
 users_collection.create_index("email", unique=True)
 
 username_filter = BloomFilter(capacity=10000, error_rate=0.01)
+login_attempts = {}
 
 USERNAME_CHECK_TOTAL = Counter(
     "sociallab_username_check_total",
@@ -29,6 +33,11 @@ USERNAME_CHECK_TOTAL = Counter(
 USERNAME_CHECK_DURATION = Histogram(
     "sociallab_username_check_duration_seconds",
     "Username availability check duration in seconds",
+)
+LOGIN_TOTAL = Counter(
+    "sociallab_login_total",
+    "Login attempts by outcome",
+    ["result"],
 )
 
 
@@ -102,7 +111,26 @@ def signup(data: SignupRequest):
 
 @app.post("/api/v1/auth/login")
 def login(data: LoginRequest):
+    if RATE_LIMIT_ENABLED:
+        now = time.time()
+        record = login_attempts.get(data.username)
+        if record and record.get("blocked_until", 0) > now:
+            LOGIN_TOTAL.labels(result="blocked").inc()
+            raise HTTPException(status_code=429, detail="too many login attempts, try again later")
+        if record and record.get("blocked_until", 0) and now >= record["blocked_until"]:
+            login_attempts.pop(data.username, None)
     user = users_collection.find_one({"username": data.username})
     if not user or not bcrypt.checkpw(data.password.encode("utf-8"), user["password"].encode("utf-8")):
+        if RATE_LIMIT_ENABLED:
+            record = login_attempts.get(data.username, {"count": 0, "blocked_until": 0})
+            record["count"] += 1
+            if record["count"] >= MAX_FAILED_ATTEMPTS:
+                record["blocked_until"] = time.time() + BLOCK_SECONDS
+            login_attempts[data.username] = record
+        LOGIN_TOTAL.labels(result="invalid").inc()
         raise HTTPException(status_code=401, detail="invalid username or password")
+    if RATE_LIMIT_ENABLED:
+        login_attempts.pop(data.username, None)
+    LOGIN_TOTAL.labels(result="success").inc()
     return {"message": "login successful", "username": user["username"]}
+
