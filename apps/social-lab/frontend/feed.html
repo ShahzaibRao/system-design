@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Feed - Social Lab</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/feed.css">
+</head>
+<body>
+  <div class="feed-container">
+    <h1>Feed</h1>
+    <p><a href="/static/signup.html">Signup</a> | <a href="/static/login.html">Login</a></p>
+    <form id="create-post-form">
+      <label for="post-username">Username</label>
+      <input type="text" id="post-username" required>
+      <label for="post-content">What is on your mind?</label>
+      <textarea id="post-content" rows="3" required></textarea>
+      <button type="submit">Post</button>
+    </form>
+    <div id="message"></div>
+    <div id="posts">Loading feed...</div>
+    <p>What this page demonstrates: posts, likes, comments, and total views from Chapter 09. Views increase on page load only, not on like or comment refresh. Acting username is the username typed above, session handling comes later.</p>
+  </div>
+  <script src="/static/feed.js"></script>
+</body>
+</html>

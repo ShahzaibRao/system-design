@@ -1,0 +1,43 @@
+.feed-container {
+  background: white;
+  padding: 24px;
+  border-radius: 8px;
+  width: 600px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.post {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+}
+.post-author {
+  font-weight: bold;
+}
+.post-time {
+  color: #6b7280;
+  font-size: 13px;
+}
+.post-meta {
+  color: #374151;
+  font-size: 14px;
+  margin-top: 8px;
+}
+.post-actions {
+  margin-top: 12px;
+}
+.post-actions button {
+  width: auto;
+  padding: 8px 16px;
+  margin-top: 0;
+  margin-right: 8px;
+}
+.comment-input {
+  margin-top: 12px;
+}
+textarea {
+  width: 100%;
+  padding: 10px;
+  margin-top: 6px;
+  box-sizing: border-box;
+}
