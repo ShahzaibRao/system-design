@@ -1,9 +1,10 @@
 import os
+import secrets
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -21,6 +22,7 @@ FILTER_ENABLED = os.environ.get("FILTER_ENABLED", "true").lower() == "true"
 RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() == "true"
 MAX_FAILED_ATTEMPTS = 5
 BLOCK_SECONDS = 60
+SESSION_EXPIRY_HOURS = 24
 client = MongoClient(MONGO_URI)
 db = client["social_lab"]
 users_collection = db["users"]
@@ -28,6 +30,9 @@ users_collection.create_index("username", unique=True)
 users_collection.create_index("email", unique=True)
 posts_collection = db["posts"]
 posts_collection.create_index([("created_at", -1)])
+sessions_collection = db["sessions"]
+sessions_collection.create_index("token", unique=True)
+sessions_collection.create_index("expires_at", expireAfterSeconds=0)
 
 username_filter = BloomFilter(capacity=10000, error_rate=0.01)
 login_attempts = {}
@@ -110,6 +115,22 @@ def get_post_or_404(post_id):
     return post
 
 
+def get_username_from_token(authorization):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    token = authorization[7:]
+    session = sessions_collection.find_one({"token": token})
+    if not session:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    expires_at = session.get("expires_at")
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at and datetime.now(timezone.utc) >= expires_at:
+        sessions_collection.delete_one({"token": token})
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    return session["username"]
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "social-lab"}
@@ -189,7 +210,21 @@ def login(data: LoginRequest):
         with login_lock:
             login_attempts.pop(data.username, None)
     LOGIN_TOTAL.labels(result="success").inc()
-    return {"message": "login successful", "username": user["username"]}
+    token = secrets.token_hex(32)
+    now = datetime.now(timezone.utc)
+    sessions_collection.insert_one({
+        "token": token,
+        "username": user["username"],
+        "created_at": now,
+        "expires_at": now + timedelta(hours=SESSION_EXPIRY_HOURS),
+    })
+    return {"message": "login successful", "username": user["username"], "token": token}
+
+
+@app.get("/api/v1/auth/me")
+def me(authorization: str = Header(None)):
+    username = get_username_from_token(authorization)
+    return {"username": username}
 
 
 @app.post("/api/v1/posts", status_code=201)
