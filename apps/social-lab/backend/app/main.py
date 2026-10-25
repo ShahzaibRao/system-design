@@ -1,4 +1,5 @@
 import os
+import hashlib
 import secrets
 import threading
 import time
@@ -31,7 +32,7 @@ users_collection.create_index("email", unique=True)
 posts_collection = db["posts"]
 posts_collection.create_index([("created_at", -1)])
 sessions_collection = db["sessions"]
-sessions_collection.create_index("token", unique=True)
+sessions_collection.create_index("token_hash", unique=True)
 sessions_collection.create_index("expires_at", expireAfterSeconds=0)
 
 username_filter = BloomFilter(capacity=10000, error_rate=0.01)
@@ -119,14 +120,15 @@ def get_username_from_token(authorization):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="invalid or expired session")
     token = authorization[7:]
-    session = sessions_collection.find_one({"token": token})
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    session = sessions_collection.find_one({"token_hash": token_hash})
     if not session:
         raise HTTPException(status_code=401, detail="invalid or expired session")
     expires_at = session.get("expires_at")
     if expires_at and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at and datetime.now(timezone.utc) >= expires_at:
-        sessions_collection.delete_one({"token": token})
+        sessions_collection.delete_one({"token_hash": token_hash})
         raise HTTPException(status_code=401, detail="invalid or expired session")
     return session["username"]
 
@@ -213,7 +215,7 @@ def login(data: LoginRequest):
     token = secrets.token_hex(32)
     now = datetime.now(timezone.utc)
     sessions_collection.insert_one({
-        "token": token,
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
         "username": user["username"],
         "created_at": now,
         "expires_at": now + timedelta(hours=SESSION_EXPIRY_HOURS),
@@ -230,7 +232,7 @@ def me(authorization: str = Header(None)):
 @app.post("/api/v1/auth/logout")
 def logout(authorization: str = Header(None)):
     if authorization and authorization.startswith("Bearer "):
-        sessions_collection.delete_one({"token": authorization[7:]})
+        sessions_collection.delete_one({"token_hash": hashlib.sha256(authorization[7:].encode()).hexdigest()})
     return {"message": "logged out"}
 
 
