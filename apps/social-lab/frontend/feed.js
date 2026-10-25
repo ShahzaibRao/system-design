@@ -1,9 +1,8 @@
 let currentUsername = '';
 
-function authHeaders() {
+function jsonHeaders() {
   return {
     'Content-Type': 'application/json',
-    'Authorization': 'Bearer ' + localStorage.getItem('social_lab_token'),
   };
 }
 
@@ -53,8 +52,9 @@ function renderPost(post, postsDiv, incrementViews) {
   likeButton.addEventListener('click', function () {
     fetch('/api/v1/posts/' + post.id + '/like', {
       method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ username: currentUsername }),
+      headers: jsonHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify({}),
     }).then(function () { loadFeed(false); });
   });
   actionsDiv.appendChild(likeButton);
@@ -84,8 +84,9 @@ function renderPost(post, postsDiv, incrementViews) {
     }
     fetch('/api/v1/posts/' + post.id + '/comment', {
       method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ username: currentUsername, text: text }),
+      headers: jsonHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify({ text: text }),
     }).then(function () { loadFeed(false); });
   });
   postDiv.appendChild(commentButton);
@@ -102,12 +103,12 @@ document.getElementById('create-post-form').addEventListener('submit', function 
   const messageDiv = document.getElementById('message');
   messageDiv.textContent = '';
   const payload = {
-    username: currentUsername,
     content: document.getElementById('post-content').value.trim(),
   };
   fetch('/api/v1/posts', {
     method: 'POST',
-    headers: authHeaders(),
+    headers: jsonHeaders(),
+    credentials: 'same-origin',
     body: JSON.stringify(payload),
   })
     .then(function (res) { return res.json(); })
@@ -125,10 +126,9 @@ document.getElementById('create-post-form').addEventListener('submit', function 
 });
 
 document.getElementById('logout-button').addEventListener('click', function () {
-  const token = localStorage.getItem('social_lab_token');
   fetch('/api/v1/auth/logout', {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + token },
+    credentials: 'same-origin',
   }).finally(function () {
     localStorage.removeItem('social_lab_token');
     localStorage.removeItem('social_lab_username');
@@ -137,13 +137,8 @@ document.getElementById('logout-button').addEventListener('click', function () {
 });
 
 (function initFeed() {
-  const token = localStorage.getItem('social_lab_token');
-  if (!token) {
-    window.location.href = '/static/login.html';
-    return;
-  }
   fetch('/api/v1/auth/me', {
-    headers: { 'Authorization': 'Bearer ' + token },
+    credentials: 'same-origin',
   })
     .then(function (res) {
       if (!res.ok) {
@@ -162,4 +157,3 @@ document.getElementById('logout-button').addEventListener('click', function () {
       window.location.href = '/static/login.html';
     });
 })();
-

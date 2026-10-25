@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Cookie
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -79,16 +79,14 @@ class LoginRequest(BaseModel):
 
 
 class PostCreate(BaseModel):
-    username: str
     content: str
 
 
 class LikeRequest(BaseModel):
-    username: str
+    pass
 
 
 class CommentRequest(BaseModel):
-    username: str
     text: str
 
 
@@ -116,11 +114,10 @@ def get_post_or_404(post_id):
     return post
 
 
-def get_username_from_token(authorization):
-    if not authorization or not authorization.startswith("Bearer "):
+def get_username_from_cookie(session_token):
+    if not session_token:
         raise HTTPException(status_code=401, detail="invalid or expired session")
-    token = authorization[7:]
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = hashlib.sha256(session_token.encode()).hexdigest()
     session = sessions_collection.find_one({"token_hash": token_hash})
     if not session:
         raise HTTPException(status_code=401, detail="invalid or expired session")
@@ -187,7 +184,7 @@ def signup(data: SignupRequest):
 
 
 @app.post("/api/v1/auth/login")
-def login(data: LoginRequest):
+def login(data: LoginRequest, response: Response):
     if RATE_LIMIT_ENABLED:
         with login_lock:
             now = time.time()
@@ -220,25 +217,35 @@ def login(data: LoginRequest):
         "created_at": now,
         "expires_at": now + timedelta(hours=SESSION_EXPIRY_HOURS),
     })
-    return {"message": "login successful", "username": user["username"], "token": token}
+    response.set_cookie(
+        key="social_lab_session",
+        value=token,
+        httponly=True,
+        max_age=24 * 60 * 60,
+        path="/",
+        samesite="lax",
+        secure=False,  # localhost HTTP demo only, production must be True with HTTPS
+    )
+    return {"message": "login successful", "username": user["username"]}
 
 
 @app.get("/api/v1/auth/me")
-def me(authorization: str = Header(None)):
-    username = get_username_from_token(authorization)
+def me(social_lab_session: str | None = Cookie(None)):
+    username = get_username_from_cookie(social_lab_session)
     return {"username": username}
 
 
 @app.post("/api/v1/auth/logout")
-def logout(authorization: str = Header(None)):
-    if authorization and authorization.startswith("Bearer "):
-        sessions_collection.delete_one({"token_hash": hashlib.sha256(authorization[7:].encode()).hexdigest()})
+def logout(response: Response, social_lab_session: str | None = Cookie(None)):
+    if social_lab_session:
+        sessions_collection.delete_one({"token_hash": hashlib.sha256(social_lab_session.encode()).hexdigest()})
+    response.delete_cookie(key="social_lab_session", path="/")
     return {"message": "logged out"}
 
 
 @app.post("/api/v1/posts", status_code=201)
-def create_post(data: PostCreate, authorization: str = Header(None)):
-    username = get_username_from_token(authorization)
+def create_post(data: PostCreate, social_lab_session: str | None = Cookie(None)):
+    username = get_username_from_cookie(social_lab_session)
     if not data.content.strip():
         raise HTTPException(status_code=400, detail="content is required")
     result = posts_collection.insert_one({
@@ -260,8 +267,8 @@ def get_feed():
 
 
 @app.post("/api/v1/posts/{post_id}/like")
-def like_post(post_id: str, data: LikeRequest, authorization: str = Header(None)):
-    username = get_username_from_token(authorization)
+def like_post(post_id: str, data: LikeRequest, social_lab_session: str | None = Cookie(None)):
+    username = get_username_from_cookie(social_lab_session)
     post = get_post_or_404(post_id)
     if username not in post.get("liked_by", []):
         posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": username}})
@@ -270,8 +277,8 @@ def like_post(post_id: str, data: LikeRequest, authorization: str = Header(None)
 
 
 @app.post("/api/v1/posts/{post_id}/comment")
-def comment_post(post_id: str, data: CommentRequest, authorization: str = Header(None)):
-    username = get_username_from_token(authorization)
+def comment_post(post_id: str, data: CommentRequest, social_lab_session: str | None = Cookie(None)):
+    username = get_username_from_cookie(social_lab_session)
     if not data.text.strip():
         raise HTTPException(status_code=400, detail="comment text is required")
     post = get_post_or_404(post_id)
