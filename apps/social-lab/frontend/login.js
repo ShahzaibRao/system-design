@@ -18,8 +18,9 @@ document.getElementById('login-form').addEventListener('submit', function (event
     })
     .then(function (result) {
       if (result.ok) {
-        messageDiv.textContent = 'Login successful, welcome ' + result.data.username;
-        messageDiv.style.color = 'green';
+        localStorage.setItem('social_lab_token', result.data.token);
+        localStorage.setItem('social_lab_username', result.data.username);
+        window.location.href = '/static/feed.html';
       } else if (result.status === 429) {
         messageDiv.textContent = result.data.detail + ' (rate limit, try again after 60 seconds)';
         messageDiv.style.color = 'red';

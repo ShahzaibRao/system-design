@@ -1,6 +1,19 @@
+let currentUsername = '';
 
-function getActingUsername() {
-  return document.getElementById('post-username').value.trim();
+function loadFeed(incrementViews) {
+  fetch('/api/v1/feed')
+    .then(function (res) { return res.json(); })
+    .then(function (posts) {
+      const postsDiv = document.getElementById('posts');
+      postsDiv.textContent = '';
+      if (posts.length === 0) {
+        postsDiv.textContent = 'No posts yet';
+        return;
+      }
+      posts.forEach(function (post) {
+        renderPost(post, postsDiv, incrementViews);
+      });
+    });
 }
 
 function renderPost(post, postsDiv, incrementViews) {
@@ -31,15 +44,10 @@ function renderPost(post, postsDiv, incrementViews) {
   const likeButton = document.createElement('button');
   likeButton.textContent = 'Like';
   likeButton.addEventListener('click', function () {
-    const username = getActingUsername();
-    if (!username) {
-      alert('Please type a username in the create post form first');
-      return;
-    }
     fetch('/api/v1/posts/' + post.id + '/like', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username }),
+      body: JSON.stringify({ username: currentUsername }),
     }).then(function () { loadFeed(false); });
   });
   actionsDiv.appendChild(likeButton);
@@ -62,16 +70,15 @@ function renderPost(post, postsDiv, incrementViews) {
   const commentButton = document.createElement('button');
   commentButton.textContent = 'Comment';
   commentButton.addEventListener('click', function () {
-    const username = getActingUsername();
     const text = commentInput.value.trim();
-    if (!username || !text) {
-      alert('Please type a username and a comment first');
+    if (!text) {
+      alert('Please write a comment first');
       return;
     }
     fetch('/api/v1/posts/' + post.id + '/comment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username, text: text }),
+      body: JSON.stringify({ username: currentUsername, text: text }),
     }).then(function () { loadFeed(false); });
   });
   postDiv.appendChild(commentButton);
@@ -83,28 +90,12 @@ function renderPost(post, postsDiv, incrementViews) {
   }
 }
 
-function loadFeed(incrementViews) {
-  fetch('/api/v1/feed')
-    .then(function (res) { return res.json(); })
-    .then(function (posts) {
-      const postsDiv = document.getElementById('posts');
-      postsDiv.textContent = '';
-      if (posts.length === 0) {
-        postsDiv.textContent = 'No posts yet';
-        return;
-      }
-      posts.forEach(function (post) {
-        renderPost(post, postsDiv, incrementViews);
-      });
-    });
-}
-
 document.getElementById('create-post-form').addEventListener('submit', function (event) {
   event.preventDefault();
   const messageDiv = document.getElementById('message');
   messageDiv.textContent = '';
   const payload = {
-    username: document.getElementById('post-username').value.trim(),
+    username: currentUsername,
     content: document.getElementById('post-content').value.trim(),
   };
   fetch('/api/v1/posts', {
@@ -126,4 +117,36 @@ document.getElementById('create-post-form').addEventListener('submit', function 
     });
 });
 
-loadFeed(true);
+document.getElementById('logout-button').addEventListener('click', function () {
+  localStorage.removeItem('social_lab_token');
+  localStorage.removeItem('social_lab_username');
+  window.location.href = '/static/login.html';
+});
+
+(function initFeed() {
+  const token = localStorage.getItem('social_lab_token');
+  if (!token) {
+    window.location.href = '/static/login.html';
+    return;
+  }
+  fetch('/api/v1/auth/me', {
+    headers: { 'Authorization': 'Bearer ' + token },
+  })
+    .then(function (res) {
+      if (!res.ok) {
+        throw new Error('invalid session');
+      }
+      return res.json();
+    })
+    .then(function (data) {
+      currentUsername = data.username;
+      document.getElementById('logged-in-user').textContent = 'Logged in as ' + currentUsername;
+      loadFeed(true);
+    })
+    .catch(function () {
+      localStorage.removeItem('social_lab_token');
+      localStorage.removeItem('social_lab_username');
+      window.location.href = '/static/login.html';
+    });
+})();
+
