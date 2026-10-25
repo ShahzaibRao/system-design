@@ -227,12 +227,20 @@ def me(authorization: str = Header(None)):
     return {"username": username}
 
 
+@app.post("/api/v1/auth/logout")
+def logout(authorization: str = Header(None)):
+    if authorization and authorization.startswith("Bearer "):
+        sessions_collection.delete_one({"token": authorization[7:]})
+    return {"message": "logged out"}
+
+
 @app.post("/api/v1/posts", status_code=201)
-def create_post(data: PostCreate):
-    if not data.username.strip() or not data.content.strip():
-        raise HTTPException(status_code=400, detail="username and content are required")
+def create_post(data: PostCreate, authorization: str = Header(None)):
+    username = get_username_from_token(authorization)
+    if not data.content.strip():
+        raise HTTPException(status_code=400, detail="content is required")
     result = posts_collection.insert_one({
-        "username": data.username.strip(),
+        "username": username,
         "content": data.content.strip(),
         "created_at": datetime.now(timezone.utc),
         "liked_by": [],
@@ -250,21 +258,23 @@ def get_feed():
 
 
 @app.post("/api/v1/posts/{post_id}/like")
-def like_post(post_id: str, data: LikeRequest):
+def like_post(post_id: str, data: LikeRequest, authorization: str = Header(None)):
+    username = get_username_from_token(authorization)
     post = get_post_or_404(post_id)
-    if data.username not in post.get("liked_by", []):
-        posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": data.username}})
+    if username not in post.get("liked_by", []):
+        posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": username}})
     post = posts_collection.find_one({"_id": post["_id"]})
     return post_to_dict(post)
 
 
 @app.post("/api/v1/posts/{post_id}/comment")
-def comment_post(post_id: str, data: CommentRequest):
+def comment_post(post_id: str, data: CommentRequest, authorization: str = Header(None)):
+    username = get_username_from_token(authorization)
     if not data.text.strip():
         raise HTTPException(status_code=400, detail="comment text is required")
     post = get_post_or_404(post_id)
     comment = {
-        "username": data.username,
+        "username": username,
         "text": data.text.strip(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

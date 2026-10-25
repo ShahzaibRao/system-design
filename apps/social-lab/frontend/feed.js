@@ -1,5 +1,12 @@
 let currentUsername = '';
 
+function authHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + localStorage.getItem('social_lab_token'),
+  };
+}
+
 function loadFeed(incrementViews) {
   fetch('/api/v1/feed')
     .then(function (res) { return res.json(); })
@@ -46,7 +53,7 @@ function renderPost(post, postsDiv, incrementViews) {
   likeButton.addEventListener('click', function () {
     fetch('/api/v1/posts/' + post.id + '/like', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ username: currentUsername }),
     }).then(function () { loadFeed(false); });
   });
@@ -77,7 +84,7 @@ function renderPost(post, postsDiv, incrementViews) {
     }
     fetch('/api/v1/posts/' + post.id + '/comment', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ username: currentUsername, text: text }),
     }).then(function () { loadFeed(false); });
   });
@@ -100,7 +107,7 @@ document.getElementById('create-post-form').addEventListener('submit', function 
   };
   fetch('/api/v1/posts', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify(payload),
   })
     .then(function (res) { return res.json(); })
@@ -118,9 +125,15 @@ document.getElementById('create-post-form').addEventListener('submit', function 
 });
 
 document.getElementById('logout-button').addEventListener('click', function () {
-  localStorage.removeItem('social_lab_token');
-  localStorage.removeItem('social_lab_username');
-  window.location.href = '/static/login.html';
+  const token = localStorage.getItem('social_lab_token');
+  fetch('/api/v1/auth/logout', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token },
+  }).finally(function () {
+    localStorage.removeItem('social_lab_token');
+    localStorage.removeItem('social_lab_username');
+    window.location.href = '/static/login.html';
+  });
 });
 
 (function initFeed() {
