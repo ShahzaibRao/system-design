@@ -1,8 +1,11 @@
+
 import os
 import threading
 import time
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import bcrypt
 from pymongo import MongoClient
@@ -26,6 +29,9 @@ users_collection.create_index("email", unique=True)
 username_filter = BloomFilter(capacity=10000, error_rate=0.01)
 login_attempts = {}
 login_lock = threading.Lock()
+
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 USERNAME_CHECK_TOTAL = Counter(
     "sociallab_username_check_total",
@@ -66,6 +72,11 @@ class LoginRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "social-lab"}
+
+
+@app.get("/")
+def root():
+    return FileResponse(FRONTEND_DIR / "signup.html")
 
 
 @app.get("/metrics")
@@ -138,3 +149,4 @@ def login(data: LoginRequest):
             login_attempts.pop(data.username, None)
     LOGIN_TOTAL.labels(result="success").inc()
     return {"message": "login successful", "username": user["username"]}
+
