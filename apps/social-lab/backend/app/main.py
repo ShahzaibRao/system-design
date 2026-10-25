@@ -1,7 +1,7 @@
-
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, FileResponse
@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import bcrypt
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
+from bson import ObjectId
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from .core.bloom import BloomFilter
 
@@ -25,6 +26,8 @@ db = client["social_lab"]
 users_collection = db["users"]
 users_collection.create_index("username", unique=True)
 users_collection.create_index("email", unique=True)
+posts_collection = db["posts"]
+posts_collection.create_index([("created_at", -1)])
 
 username_filter = BloomFilter(capacity=10000, error_rate=0.01)
 login_attempts = {}
@@ -67,6 +70,44 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class PostCreate(BaseModel):
+    username: str
+    content: str
+
+
+class LikeRequest(BaseModel):
+    username: str
+
+
+class CommentRequest(BaseModel):
+    username: str
+    text: str
+
+
+def post_to_dict(post):
+    return {
+        "id": str(post["_id"]),
+        "username": post["username"],
+        "content": post["content"],
+        "created_at": post["created_at"].isoformat() if post.get("created_at") else None,
+        "likes_count": len(post.get("liked_by", [])),
+        "liked_by": post.get("liked_by", []),
+        "comments": post.get("comments", []),
+        "views": post.get("views", 0),
+    }
+
+
+def get_post_or_404(post_id):
+    try:
+        object_id = ObjectId(post_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="post not found")
+    post = posts_collection.find_one({"_id": object_id})
+    if not post:
+        raise HTTPException(status_code=404, detail="post not found")
+    return post
 
 
 @app.get("/health")
@@ -149,4 +190,60 @@ def login(data: LoginRequest):
             login_attempts.pop(data.username, None)
     LOGIN_TOTAL.labels(result="success").inc()
     return {"message": "login successful", "username": user["username"]}
+
+
+@app.post("/api/v1/posts", status_code=201)
+def create_post(data: PostCreate):
+    if not data.username.strip() or not data.content.strip():
+        raise HTTPException(status_code=400, detail="username and content are required")
+    result = posts_collection.insert_one({
+        "username": data.username.strip(),
+        "content": data.content.strip(),
+        "created_at": datetime.now(timezone.utc),
+        "liked_by": [],
+        "comments": [],
+        "views": 0,
+    })
+    post = posts_collection.find_one({"_id": result.inserted_id})
+    return post_to_dict(post)
+
+
+@app.get("/api/v1/feed")
+def get_feed():
+    posts = posts_collection.find().sort("created_at", -1).limit(20)
+    return [post_to_dict(post) for post in posts]
+
+
+@app.post("/api/v1/posts/{post_id}/like")
+def like_post(post_id: str, data: LikeRequest):
+    post = get_post_or_404(post_id)
+    if data.username not in post.get("liked_by", []):
+        posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": data.username}})
+    post = posts_collection.find_one({"_id": post["_id"]})
+    return post_to_dict(post)
+
+
+@app.post("/api/v1/posts/{post_id}/comment")
+def comment_post(post_id: str, data: CommentRequest):
+    if not data.text.strip():
+        raise HTTPException(status_code=400, detail="comment text is required")
+    post = get_post_or_404(post_id)
+    comment = {
+        "username": data.username,
+        "text": data.text.strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    posts_collection.update_one({"_id": post["_id"]}, {"$push": {"comments": comment}})
+    post = posts_collection.find_one({"_id": post["_id"]})
+    return post_to_dict(post)
+
+
+@app.post("/api/v1/posts/{post_id}/view")
+def view_post(post_id: str):
+    post = get_post_or_404(post_id)
+    posts_collection.update_one({"_id": post["_id"]}, {"$inc": {"views": 1}})
+    post = posts_collection.find_one({"_id": post["_id"]})
+    return post_to_dict(post)
+
+
 
