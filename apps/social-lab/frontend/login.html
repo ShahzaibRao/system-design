@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Login - Social Lab</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Login</h1>
+    <form id="login-form">
+      <label for="username">Username</label>
+      <input type="text" id="username" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" required>
+      <button type="submit" id="login-button">Login</button>
+    </form>
+    <div id="message"></div>
+    <p>No account? <a href="/static/signup.html">Signup</a></p>
+    <p>What this page demonstrates: login uses bcrypt from Chapter 02, MongoDB from Chapter 03, and rate limiting from Chapter 07, 5 failed attempts then 60 seconds block.</p>
+  </div>
+  <script src="/static/login.js"></script>
+</body>
+</html>
