@@ -2,6 +2,8 @@ let currentUsername = '';
 
 
 let nextCursor = null;
+let feedMode = 'all';
+let followingSet = {};
 
 function updateLoadMoreButton() {
   var button = document.getElementById('load-more-button');
@@ -10,8 +12,20 @@ function updateLoadMoreButton() {
   }
 }
 
+function loadFollowingSet() {
+  fetch('/api/v1/following', { credentials: 'same-origin' })
+    .then(function (res) { return res.ok ? res.json() : { following: [] }; })
+    .then(function (data) {
+      followingSet = {};
+      data.following.forEach(function (u) { followingSet[u] = true; });
+      loadFeed(true);
+    })
+    .catch(function () { followingSet = {}; loadFeed(true); });
+}
+
 function loadFeed(incrementViews) {
-  fetch('/api/v1/feed')
+  var feedUrl = feedMode === 'following' ? '/api/v1/feed/following' : '/api/v1/feed';
+  fetch(feedUrl, { credentials: 'same-origin' })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       const postsDiv = document.getElementById('posts');
@@ -33,7 +47,8 @@ function loadMore() {
   if (!nextCursor) {
     return;
   }
-  fetch('/api/v1/feed?cursor=' + encodeURIComponent(nextCursor))
+  var moreBase = feedMode === 'following' ? '/api/v1/feed/following' : '/api/v1/feed';
+  fetch(moreBase + '?cursor=' + encodeURIComponent(nextCursor), { credentials: 'same-origin' })
     .then(function (res) { return res.json(); })
     .then(function (data) {
       const postsDiv = document.getElementById('posts');
@@ -46,9 +61,25 @@ function loadMore() {
     });
 }
 
+function updatePostMeta(post) {
+  var el = document.getElementById('post-' + post.id);
+  if (!el) { return; }
+  var meta = el.querySelector('.post-meta');
+  if (!meta) { return; }
+  var uniqueText = '';
+  if (post.unique_views !== null && post.unique_views !== undefined) {
+    uniqueText = ' | ' + post.unique_views + ' unique views';
+  } else {
+    var m = meta.textContent.match(/ \| [0-9]+ unique views/);
+    if (m) { uniqueText = m[0]; }
+  }
+  meta.textContent = post.likes_count + ' likes | ' + post.views + ' views' + uniqueText + ' | ' + post.comments.length + ' comments';
+}
+
 function renderPost(post, postsDiv, incrementViews) {
   const postDiv = document.createElement('div');
   postDiv.className = 'post';
+  postDiv.id = 'post-' + post.id;
 
   const authorDiv = document.createElement('div');
   authorDiv.className = 'post-author';
@@ -80,9 +111,34 @@ function renderPost(post, postsDiv, incrementViews) {
       headers: csrfHeaders(),
       credentials: 'same-origin',
       body: JSON.stringify({}),
-    }).then(function () { loadFeed(false); });
+    }).then(function (res) { return res.ok ? res.json() : null; }).then(function (updated) { if (updated) { updatePostMeta(updated); } });
   });
   actionsDiv.appendChild(likeButton);
+  if (post.username !== currentUsername) {
+    const followButton = document.createElement('button');
+    followButton.textContent = followingSet[post.username] ? 'Unfollow' : 'Follow';
+    followButton.addEventListener('click', function () {
+      var action = followingSet[post.username] ? 'unfollow' : 'follow';
+      fetch('/api/v1/users/' + post.username + '/' + action, {
+        method: 'POST',
+        headers: csrfHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({}),
+      }).then(function () {
+        var wasFollowing = followingSet[post.username];
+        followingSet[post.username] = !wasFollowing;
+        followButton.textContent = followingSet[post.username] ? 'Unfollow' : 'Follow';
+        if (feedMode === 'following' && !followingSet[post.username]) {
+          var allPosts = postsDiv.querySelectorAll('.post');
+          allPosts.forEach(function (el) {
+            var a = el.querySelector('.post-author');
+            if (a && a.textContent === post.username) { el.remove(); }
+          });
+        }
+      });
+    });
+    actionsDiv.appendChild(followButton);
+  }
   if (post.username === currentUsername) {
     const deleteButton = document.createElement('button');
     deleteButton.textContent = 'Delete';
@@ -91,13 +147,14 @@ function renderPost(post, postsDiv, incrementViews) {
         method: 'DELETE',
         headers: csrfHeaders(),
         credentials: 'same-origin',
-      }).then(function () { loadFeed(false); });
+      }).then(function () { var el = document.getElementById('post-' + post.id); if (el) { el.remove(); } });
     });
     actionsDiv.appendChild(deleteButton);
   }
   postDiv.appendChild(actionsDiv);
 
   const commentsDiv = document.createElement('div');
+  commentsDiv.className = 'post-comments';
   post.comments.forEach(function (comment) {
     const commentP = document.createElement('p');
     commentP.textContent = comment.username + ': ' + comment.text;
@@ -124,7 +181,15 @@ function renderPost(post, postsDiv, incrementViews) {
       headers: csrfHeaders(),
       credentials: 'same-origin',
       body: JSON.stringify({ text: text }),
-    }).then(function () { loadFeed(false); });
+    }).then(function (res) { return res.ok ? res.json() : null; }).then(function (updated) {
+      if (!updated) { return; }
+      updatePostMeta(updated);
+      var box = document.getElementById('post-' + post.id).querySelector('.post-comments');
+      var commentP = document.createElement('p');
+      commentP.textContent = currentUsername + ': ' + text;
+      box.appendChild(commentP);
+      commentInput.value = '';
+    });
   });
   postDiv.appendChild(commentButton);
 
@@ -202,7 +267,7 @@ document.getElementById('logout-button').addEventListener('click', function () {
     .then(function (data) {
       currentUsername = data.username;
       document.getElementById('logged-in-user').textContent = 'Logged in as ' + currentUsername;
-      loadFeed(true);
+      loadFollowingSet();
     })
     .catch(function () {
       localStorage.removeItem('social_lab_token');
@@ -227,3 +292,5 @@ function csrfHeaders() {
 }
 
 document.getElementById('load-more-button').addEventListener('click', loadMore);
+document.getElementById('all-feed-button').addEventListener('click', function () { feedMode = 'all'; loadFeed(true); });
+document.getElementById('following-feed-button').addEventListener('click', function () { feedMode = 'following'; loadFeed(true); });

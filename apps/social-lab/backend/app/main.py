@@ -25,6 +25,7 @@ CSP_ENABLED = os.environ.get("CSP_ENABLED", "true").lower() == "true"
 CSP_POLICY = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 FEED_CACHE_ENABLED = os.environ.get("FEED_CACHE_ENABLED", "true").lower() == "true"
 FEED_CACHE_TTL_SECONDS = int(os.environ.get("FEED_CACHE_TTL_SECONDS", "60"))
+FOLLOW_ENABLED = os.environ.get("FOLLOW_ENABLED", "true").lower() == "true"
 
 
 @app.middleware("http")
@@ -450,7 +451,7 @@ def invalidate_feed_cache():
     if redis_client is None:
         return
     try:
-        for key in redis_client.scan_iter("feed:page:*"):
+        for key in redis_client.scan_iter("feed:*"):
             redis_client.delete(key)
     except Exception:
         pass
@@ -537,8 +538,111 @@ def delete_post(post_id: str, social_lab_session: str | None = Cookie(None), csr
     if OWNER_CHECK_ENABLED and post.get("username") != username:
         raise HTTPException(status_code=403, detail="not your post")
     posts_collection.delete_one({"_id": post["_id"]})
+    try:
+        if redis_client is not None:
+            redis_client.delete("uv:post:" + post_id)
+    except Exception:
+        pass
     invalidate_feed_cache()
     return {"message": "post deleted", "id": post_id}
+
+
+follows_collection = posts_collection.database["follows"]
+try:
+    follows_collection.create_index([("follower", 1), ("following", 1)], unique=True)
+except Exception:
+    pass
+
+
+def _get_following(username):
+    return [doc["following"] for doc in follows_collection.find({"follower": username}, {"following": 1})]
+
+
+@app.post("/api/v1/users/{username}/follow")
+def follow_user(username: str, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
+    if not FOLLOW_ENABLED:
+        raise HTTPException(status_code=404, detail="follows disabled")
+    current = get_username_from_cookie(social_lab_session)
+    validate_csrf(csrf_token, x_csrf_token)
+    if username == current:
+        raise HTTPException(status_code=400, detail="cannot follow yourself")
+    target = users_collection.find_one({"username": username})
+    if target is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    follows_collection.update_one({"follower": current, "following": username}, {"$setOnInsert": {"created_at": datetime.now(timezone.utc).replace(tzinfo=None)}}, upsert=True)
+    invalidate_feed_cache()
+    return {"following": username, "status": "following"}
+
+
+@app.post("/api/v1/users/{username}/unfollow")
+def unfollow_user(username: str, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
+    if not FOLLOW_ENABLED:
+        raise HTTPException(status_code=404, detail="follows disabled")
+    current = get_username_from_cookie(social_lab_session)
+    validate_csrf(csrf_token, x_csrf_token)
+    if username == current:
+        raise HTTPException(status_code=400, detail="cannot follow yourself")
+    target = users_collection.find_one({"username": username})
+    if target is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    follows_collection.delete_one({"follower": current, "following": username})
+    invalidate_feed_cache()
+    return {"following": username, "status": "not_following"}
+
+
+@app.get("/api/v1/following")
+def get_following_list(social_lab_session: str | None = Cookie(None)):
+    if not FOLLOW_ENABLED:
+        raise HTTPException(status_code=404, detail="follows disabled")
+    current = get_username_from_cookie(social_lab_session)
+    return {"following": _get_following(current)}
+
+
+@app.get("/api/v1/feed/following")
+def get_following_feed(response: Response, limit: int = 20, cursor: str | None = None, social_lab_session: str | None = Cookie(None)):
+    if not FOLLOW_ENABLED:
+        raise HTTPException(status_code=404, detail="follows disabled")
+    current = get_username_from_cookie(social_lab_session)
+    following = _get_following(current)
+    if not CURSOR_PAGINATION_ENABLED:
+        posts = posts_collection.find({"username": {"$in": following}}).sort("created_at", -1).limit(20)
+        result = [post_to_dict(post) for post in posts]
+        for item in result:
+            item["unique_views"] = get_unique_views(item["id"]) if UNIQUE_VIEWS_ENABLED else None
+        response.headers["X-Cache"] = "BYPASS"
+        return result
+    limit = max(1, min(limit, 100))
+    cache_key = "feed:following:" + current + ":" + str(limit) + ":" + (cursor if cursor else "first")
+    if FEED_CACHE_ENABLED and redis_client is not None:
+        try:
+            cached = redis_client.get(cache_key)
+        except Exception:
+            cached = None
+        if cached is not None:
+            response.headers["X-Cache"] = "HIT"
+            return json.loads(cached)
+    query = {"username": {"$in": following}}
+    if cursor:
+        try:
+            cursor_time, cursor_id = _parse_cursor(cursor)
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid cursor")
+        query = {"username": {"$in": following}, "$or": [{"created_at": {"$lt": cursor_time}}, {"created_at": cursor_time, "_id": {"$lt": cursor_id}}]}
+    docs = list(posts_collection.find(query).sort([("created_at", -1), ("_id", -1)]).limit(limit + 1))
+    has_more = len(docs) > limit
+    docs = docs[:limit]
+    result = [post_to_dict(post) for post in docs]
+    for item in result:
+        item["unique_views"] = get_unique_views(item["id"]) if UNIQUE_VIEWS_ENABLED else None
+    next_cursor = _make_cursor(docs[-1]) if has_more and docs else None
+    payload = {"posts": result, "next_cursor": next_cursor}
+    if FEED_CACHE_ENABLED and redis_client is not None:
+        try:
+            redis_client.setex(cache_key, FEED_CACHE_TTL_SECONDS, json.dumps(payload))
+        except Exception:
+            pass
+    response.headers["X-Cache"] = "MISS"
+    return payload
 
 
 @app.post("/api/v1/posts/{post_id}/view")
