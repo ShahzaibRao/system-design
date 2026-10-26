@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Cookie, Header
+from fastapi import FastAPI, HTTPException, Cookie, Header, Request
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -19,6 +19,17 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 from .core.bloom import BloomFilter
 
 app = FastAPI(title="social-lab")
+
+CSP_ENABLED = os.environ.get("CSP_ENABLED", "true").lower() == "true"
+CSP_POLICY = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+
+
+@app.middleware("http")
+async def add_csp_headers(request: Request, call_next):
+    response = await call_next(request)
+    if CSP_ENABLED:
+        response.headers["Content-Security-Policy"] = CSP_POLICY
+    return response
 
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 FILTER_ENABLED = os.environ.get("FILTER_ENABLED", "true").lower() == "true"
