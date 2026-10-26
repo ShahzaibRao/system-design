@@ -31,3 +31,7 @@ document.getElementById('login-form').addEventListener('submit', function (event
       }
     });
 });
+
+fetch('/api/v1/auth/me', { credentials: 'same-origin' }).then(function (res) {
+  if (res.ok) { window.location.href = '/static/feed.html'; }
+}).catch(function () {});

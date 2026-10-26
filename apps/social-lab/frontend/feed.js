@@ -267,6 +267,7 @@ document.getElementById('logout-button').addEventListener('click', function () {
     .then(function (data) {
       currentUsername = data.username;
       document.getElementById('logged-in-user').textContent = 'Logged in as ' + currentUsername;
+      document.getElementById('auth-links').hidden = true;
       loadFollowingSet();
     })
     .catch(function () {

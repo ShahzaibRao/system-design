@@ -57,3 +57,7 @@ document.getElementById('signup-form').addEventListener('submit', function (even
       }
     });
 });
+
+fetch('/api/v1/auth/me', { credentials: 'same-origin' }).then(function (res) {
+  if (res.ok) { window.location.href = '/static/feed.html'; }
+}).catch(function () {});
