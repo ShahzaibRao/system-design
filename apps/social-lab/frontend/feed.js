@@ -1,19 +1,48 @@
 let currentUsername = '';
 
 
+let nextCursor = null;
+
+function updateLoadMoreButton() {
+  var button = document.getElementById('load-more-button');
+  if (button) {
+    button.hidden = !nextCursor;
+  }
+}
+
 function loadFeed(incrementViews) {
   fetch('/api/v1/feed')
     .then(function (res) { return res.json(); })
-    .then(function (posts) {
+    .then(function (data) {
       const postsDiv = document.getElementById('posts');
       postsDiv.textContent = '';
+      var posts = Array.isArray(data) ? data : data.posts;
+      nextCursor = Array.isArray(data) ? null : data.next_cursor;
       if (posts.length === 0) {
         postsDiv.textContent = 'No posts yet';
-        return;
+      } else {
+        posts.forEach(function (post) {
+          renderPost(post, postsDiv, incrementViews);
+        });
       }
+      updateLoadMoreButton();
+    });
+}
+
+function loadMore() {
+  if (!nextCursor) {
+    return;
+  }
+  fetch('/api/v1/feed?cursor=' + encodeURIComponent(nextCursor))
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      const postsDiv = document.getElementById('posts');
+      var posts = Array.isArray(data) ? data : data.posts;
+      nextCursor = Array.isArray(data) ? null : data.next_cursor;
       posts.forEach(function (post) {
-        renderPost(post, postsDiv, incrementViews);
+        renderPost(post, postsDiv, true);
       });
+      updateLoadMoreButton();
     });
 }
 
@@ -196,3 +225,5 @@ function getCsrfToken() {
 function csrfHeaders() {
   return { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() };
 }
+
+document.getElementById('load-more-button').addEventListener('click', loadMore);

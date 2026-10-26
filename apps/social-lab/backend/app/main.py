@@ -192,6 +192,9 @@ REFRESH_TOKENS_ENABLED = os.getenv("REFRESH_TOKENS_ENABLED", "true").lower() == 
 OWNER_CHECK_ENABLED = os.getenv("OWNER_CHECK_ENABLED", "true").lower() == "true"
 
 
+CURSOR_PAGINATION_ENABLED = os.getenv("CURSOR_PAGINATION_ENABLED", "true").lower() == "true"
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "social-lab"}
@@ -423,13 +426,42 @@ def create_post(data: PostCreate, social_lab_session: str | None = Cookie(None),
     return post_to_dict(post)
 
 
+def _make_cursor(post):
+    return post["created_at"].isoformat() + "_" + str(post["_id"])
+
+
+def _parse_cursor(cursor):
+    created_str, post_id = cursor.rsplit("_", 1)
+    created_at = datetime.fromisoformat(created_str)
+    if created_at.tzinfo is not None:
+        created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
+    return created_at, ObjectId(post_id)
+
+
 @app.get("/api/v1/feed")
-def get_feed():
-    posts = posts_collection.find().sort("created_at", -1).limit(20)
-    result = [post_to_dict(post) for post in posts]
+def get_feed(limit: int = 20, cursor: str | None = None):
+    if not CURSOR_PAGINATION_ENABLED:
+        posts = posts_collection.find().sort("created_at", -1).limit(20)
+        result = [post_to_dict(post) for post in posts]
+        for item in result:
+            item["unique_views"] = get_unique_views(item["id"]) if UNIQUE_VIEWS_ENABLED else None
+        return result
+    limit = max(1, min(limit, 100))
+    query = {}
+    if cursor:
+        try:
+            cursor_time, cursor_id = _parse_cursor(cursor)
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid cursor")
+        query = {"$or": [{"created_at": {"$lt": cursor_time}}, {"created_at": cursor_time, "_id": {"$lt": cursor_id}}]}
+    docs = list(posts_collection.find(query).sort([("created_at", -1), ("_id", -1)]).limit(limit + 1))
+    has_more = len(docs) > limit
+    docs = docs[:limit]
+    result = [post_to_dict(post) for post in docs]
     for item in result:
         item["unique_views"] = get_unique_views(item["id"]) if UNIQUE_VIEWS_ENABLED else None
-    return result
+    next_cursor = _make_cursor(docs[-1]) if has_more and docs else None
+    return {"posts": result, "next_cursor": next_cursor}
 
 
 @app.post("/api/v1/posts/{post_id}/like")
