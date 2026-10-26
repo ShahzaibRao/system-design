@@ -1,5 +1,6 @@
 import os
 import hashlib
+import json
 import redis
 import hmac
 import secrets
@@ -22,6 +23,8 @@ app = FastAPI(title="social-lab")
 
 CSP_ENABLED = os.environ.get("CSP_ENABLED", "true").lower() == "true"
 CSP_POLICY = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+FEED_CACHE_ENABLED = os.environ.get("FEED_CACHE_ENABLED", "true").lower() == "true"
+FEED_CACHE_TTL_SECONDS = int(os.environ.get("FEED_CACHE_TTL_SECONDS", "60"))
 
 
 @app.middleware("http")
@@ -423,6 +426,7 @@ def create_post(data: PostCreate, social_lab_session: str | None = Cookie(None),
         "views": 0,
     })
     post = posts_collection.find_one({"_id": result.inserted_id})
+    invalidate_feed_cache()
     return post_to_dict(post)
 
 
@@ -438,15 +442,39 @@ def _parse_cursor(cursor):
     return created_at, ObjectId(post_id)
 
 
+def _feed_cache_key(limit, cursor):
+    return "feed:page:" + str(limit) + ":" + (cursor if cursor else "first")
+
+
+def invalidate_feed_cache():
+    if redis_client is None:
+        return
+    try:
+        for key in redis_client.scan_iter("feed:page:*"):
+            redis_client.delete(key)
+    except Exception:
+        pass
+
+
 @app.get("/api/v1/feed")
-def get_feed(limit: int = 20, cursor: str | None = None):
+def get_feed(response: Response, limit: int = 20, cursor: str | None = None):
     if not CURSOR_PAGINATION_ENABLED:
         posts = posts_collection.find().sort("created_at", -1).limit(20)
         result = [post_to_dict(post) for post in posts]
         for item in result:
             item["unique_views"] = get_unique_views(item["id"]) if UNIQUE_VIEWS_ENABLED else None
+        response.headers["X-Cache"] = "BYPASS"
         return result
     limit = max(1, min(limit, 100))
+    cache_key = _feed_cache_key(limit, cursor)
+    if FEED_CACHE_ENABLED and redis_client is not None:
+        try:
+            cached = redis_client.get(cache_key)
+        except Exception:
+            cached = None
+        if cached is not None:
+            response.headers["X-Cache"] = "HIT"
+            return json.loads(cached)
     query = {}
     if cursor:
         try:
@@ -461,7 +489,14 @@ def get_feed(limit: int = 20, cursor: str | None = None):
     for item in result:
         item["unique_views"] = get_unique_views(item["id"]) if UNIQUE_VIEWS_ENABLED else None
     next_cursor = _make_cursor(docs[-1]) if has_more and docs else None
-    return {"posts": result, "next_cursor": next_cursor}
+    payload = {"posts": result, "next_cursor": next_cursor}
+    if FEED_CACHE_ENABLED and redis_client is not None:
+        try:
+            redis_client.setex(cache_key, FEED_CACHE_TTL_SECONDS, json.dumps(payload))
+        except Exception:
+            pass
+    response.headers["X-Cache"] = "MISS"
+    return payload
 
 
 @app.post("/api/v1/posts/{post_id}/like")
@@ -472,6 +507,7 @@ def like_post(post_id: str, data: LikeRequest, social_lab_session: str | None = 
     if username not in post.get("liked_by", []):
         posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": username}})
     post = posts_collection.find_one({"_id": post["_id"]})
+    invalidate_feed_cache()
     return post_to_dict(post)
 
 
@@ -489,6 +525,7 @@ def comment_post(post_id: str, data: CommentRequest, social_lab_session: str | N
     }
     posts_collection.update_one({"_id": post["_id"]}, {"$push": {"comments": comment}})
     post = posts_collection.find_one({"_id": post["_id"]})
+    invalidate_feed_cache()
     return post_to_dict(post)
 
 
@@ -500,6 +537,7 @@ def delete_post(post_id: str, social_lab_session: str | None = Cookie(None), csr
     if OWNER_CHECK_ENABLED and post.get("username") != username:
         raise HTTPException(status_code=403, detail="not your post")
     posts_collection.delete_one({"_id": post["_id"]})
+    invalidate_feed_cache()
     return {"message": "post deleted", "id": post_id}
 
 
