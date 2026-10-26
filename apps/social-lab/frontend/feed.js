@@ -37,7 +37,8 @@ function renderPost(post, postsDiv, incrementViews) {
 
   const metaDiv = document.createElement('div');
   metaDiv.className = 'post-meta';
-  metaDiv.textContent = post.likes_count + ' likes | ' + post.views + ' views | ' + post.comments.length + ' comments';
+  var uniqueText = (post.unique_views !== null && post.unique_views !== undefined) ? (' | ' + post.unique_views + ' unique views') : '';
+  metaDiv.textContent = post.likes_count + ' likes | ' + post.views + ' views' + uniqueText + ' | ' + post.comments.length + ' comments';
   postDiv.appendChild(metaDiv);
 
   const actionsDiv = document.createElement('div');
@@ -89,7 +90,7 @@ function renderPost(post, postsDiv, incrementViews) {
   postsDiv.appendChild(postDiv);
 
   if (incrementViews) {
-    fetch('/api/v1/posts/' + post.id + '/view', { method: 'POST' });
+    fetch('/api/v1/posts/' + post.id + '/view', { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': getCsrfToken() } });
   }
 }
 

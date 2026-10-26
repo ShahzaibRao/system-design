@@ -36,7 +36,18 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     restart: unless-stopped
 
+  redis:
+    image: redis:7
+    container_name: social-lab-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+
 volumes:
   mongo_data:
   prometheus_data:
   grafana_data:
+  redis_data:

@@ -1,5 +1,6 @@
 import os
 import hashlib
+import redis
 import hmac
 import secrets
 import threading
@@ -136,6 +137,34 @@ def validate_csrf(csrf_token_cookie, csrf_token_header):
         raise HTTPException(status_code=403, detail="csrf token missing")
     if not hmac.compare_digest(csrf_token_cookie, csrf_token_header):
         raise HTTPException(status_code=403, detail="csrf token invalid")
+
+
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+UNIQUE_VIEWS_ENABLED = os.getenv("UNIQUE_VIEWS_ENABLED", "true").lower() == "true"
+try:
+    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=2)
+    redis_client.ping()
+except Exception:
+    redis_client = None
+
+
+def track_unique_view(post_id, username):
+    if not UNIQUE_VIEWS_ENABLED or redis_client is None:
+        return
+    try:
+        redis_client.pfadd("uv:post:" + post_id, username)
+    except Exception:
+        pass
+
+
+def get_unique_views(post_id):
+    if not UNIQUE_VIEWS_ENABLED or redis_client is None:
+        return None
+    try:
+        return redis_client.pfcount("uv:post:" + post_id)
+    except Exception:
+        return None
 
 
 @app.get("/health")
@@ -284,7 +313,10 @@ def create_post(data: PostCreate, social_lab_session: str | None = Cookie(None),
 @app.get("/api/v1/feed")
 def get_feed():
     posts = posts_collection.find().sort("created_at", -1).limit(20)
-    return [post_to_dict(post) for post in posts]
+    result = [post_to_dict(post) for post in posts]
+    for item in result:
+        item["unique_views"] = get_unique_views(item["id"]) if UNIQUE_VIEWS_ENABLED else None
+    return result
 
 
 @app.post("/api/v1/posts/{post_id}/like")
@@ -316,11 +348,16 @@ def comment_post(post_id: str, data: CommentRequest, social_lab_session: str | N
 
 
 @app.post("/api/v1/posts/{post_id}/view")
-def view_post(post_id: str):
+def view_post(post_id: str, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
+    username = get_username_from_cookie(social_lab_session)
+    validate_csrf(csrf_token, x_csrf_token)
     post = get_post_or_404(post_id)
     posts_collection.update_one({"_id": post["_id"]}, {"$inc": {"views": 1}})
+    track_unique_view(post_id, username)
     post = posts_collection.find_one({"_id": post["_id"]})
-    return post_to_dict(post)
+    result = post_to_dict(post)
+    result["unique_views"] = get_unique_views(post_id) if UNIQUE_VIEWS_ENABLED else None
+    return result
 
 
 
