@@ -1,10 +1,5 @@
 let currentUsername = '';
 
-function jsonHeaders() {
-  return {
-    'Content-Type': 'application/json',
-  };
-}
 
 function loadFeed(incrementViews) {
   fetch('/api/v1/feed')
@@ -52,7 +47,7 @@ function renderPost(post, postsDiv, incrementViews) {
   likeButton.addEventListener('click', function () {
     fetch('/api/v1/posts/' + post.id + '/like', {
       method: 'POST',
-      headers: jsonHeaders(),
+      headers: csrfHeaders(),
       credentials: 'same-origin',
       body: JSON.stringify({}),
     }).then(function () { loadFeed(false); });
@@ -84,7 +79,7 @@ function renderPost(post, postsDiv, incrementViews) {
     }
     fetch('/api/v1/posts/' + post.id + '/comment', {
       method: 'POST',
-      headers: jsonHeaders(),
+      headers: csrfHeaders(),
       credentials: 'same-origin',
       body: JSON.stringify({ text: text }),
     }).then(function () { loadFeed(false); });
@@ -107,7 +102,7 @@ document.getElementById('create-post-form').addEventListener('submit', function 
   };
   fetch('/api/v1/posts', {
     method: 'POST',
-    headers: jsonHeaders(),
+    headers: csrfHeaders(),
     credentials: 'same-origin',
     body: JSON.stringify(payload),
   })
@@ -126,7 +121,7 @@ document.getElementById('create-post-form').addEventListener('submit', function 
 });
 
 document.getElementById('logout-button').addEventListener('click', function () {
-  fetch('/api/v1/auth/logout', {
+  fetch('/api/v1/auth/logout', { headers: { 'X-CSRF-Token': getCsrfToken() },
     method: 'POST',
     credentials: 'same-origin',
   }).finally(function () {
@@ -157,3 +152,18 @@ document.getElementById('logout-button').addEventListener('click', function () {
       window.location.href = '/static/login.html';
     });
 })();
+
+function getCsrfToken() {
+  var parts = document.cookie.split(';');
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    if (part.indexOf('csrf_token=') === 0) {
+      return part.substring('csrf_token='.length);
+    }
+  }
+  return '';
+}
+
+function csrfHeaders() {
+  return { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() };
+}

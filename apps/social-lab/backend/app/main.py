@@ -1,11 +1,12 @@
 import os
 import hashlib
+import hmac
 import secrets
 import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Cookie
+from fastapi import FastAPI, HTTPException, Cookie, Header
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -130,6 +131,13 @@ def get_username_from_cookie(session_token):
     return session["username"]
 
 
+def validate_csrf(csrf_token_cookie, csrf_token_header):
+    if not csrf_token_cookie or not csrf_token_header:
+        raise HTTPException(status_code=403, detail="csrf token missing")
+    if not hmac.compare_digest(csrf_token_cookie, csrf_token_header):
+        raise HTTPException(status_code=403, detail="csrf token invalid")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "social-lab"}
@@ -226,6 +234,16 @@ def login(data: LoginRequest, response: Response):
         samesite="lax",
         secure=False,  # localhost HTTP demo only, production must be True with HTTPS
     )
+    csrf_token = secrets.token_hex(32)
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,  # frontend JS must read it to send as header, it is not a session token
+        max_age=24 * 60 * 60,
+        path="/",
+        samesite="lax",
+        secure=False,  # localhost HTTP demo only, production must be True with HTTPS
+    )
     return {"message": "login successful", "username": user["username"]}
 
 
@@ -236,16 +254,19 @@ def me(social_lab_session: str | None = Cookie(None)):
 
 
 @app.post("/api/v1/auth/logout")
-def logout(response: Response, social_lab_session: str | None = Cookie(None)):
+def logout(response: Response, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
     if social_lab_session:
+        validate_csrf(csrf_token, x_csrf_token)
         sessions_collection.delete_one({"token_hash": hashlib.sha256(social_lab_session.encode()).hexdigest()})
     response.delete_cookie(key="social_lab_session", path="/")
+    response.delete_cookie(key="csrf_token", path="/")
     return {"message": "logged out"}
 
 
 @app.post("/api/v1/posts", status_code=201)
-def create_post(data: PostCreate, social_lab_session: str | None = Cookie(None)):
+def create_post(data: PostCreate, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
     username = get_username_from_cookie(social_lab_session)
+    validate_csrf(csrf_token, x_csrf_token)
     if not data.content.strip():
         raise HTTPException(status_code=400, detail="content is required")
     result = posts_collection.insert_one({
@@ -267,8 +288,9 @@ def get_feed():
 
 
 @app.post("/api/v1/posts/{post_id}/like")
-def like_post(post_id: str, data: LikeRequest, social_lab_session: str | None = Cookie(None)):
+def like_post(post_id: str, data: LikeRequest, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
     username = get_username_from_cookie(social_lab_session)
+    validate_csrf(csrf_token, x_csrf_token)
     post = get_post_or_404(post_id)
     if username not in post.get("liked_by", []):
         posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": username}})
@@ -277,8 +299,9 @@ def like_post(post_id: str, data: LikeRequest, social_lab_session: str | None = 
 
 
 @app.post("/api/v1/posts/{post_id}/comment")
-def comment_post(post_id: str, data: CommentRequest, social_lab_session: str | None = Cookie(None)):
+def comment_post(post_id: str, data: CommentRequest, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
     username = get_username_from_cookie(social_lab_session)
+    validate_csrf(csrf_token, x_csrf_token)
     if not data.text.strip():
         raise HTTPException(status_code=400, detail="comment text is required")
     post = get_post_or_404(post_id)
