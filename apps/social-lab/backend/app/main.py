@@ -47,7 +47,8 @@ users_collection = db["users"]
 users_collection.create_index("username", unique=True)
 users_collection.create_index("email", unique=True)
 posts_collection = db["posts"]
-posts_collection.create_index([("created_at", -1)])
+posts_collection.create_index([("username", 1), ("created_at", -1), ("_id", -1)])
+posts_collection.create_index([("created_at", -1), ("_id", -1)])
 sessions_collection = db["sessions"]
 sessions_collection.create_index("token_hash", unique=True)
 sessions_collection.create_index("expires_at", expireAfterSeconds=0)
