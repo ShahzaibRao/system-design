@@ -54,6 +54,18 @@ function renderPost(post, postsDiv, incrementViews) {
     }).then(function () { loadFeed(false); });
   });
   actionsDiv.appendChild(likeButton);
+  if (post.username === currentUsername) {
+    const deleteButton = document.createElement('button');
+    deleteButton.textContent = 'Delete';
+    deleteButton.addEventListener('click', function () {
+      fetch('/api/v1/posts/' + post.id, {
+        method: 'DELETE',
+        headers: csrfHeaders(),
+        credentials: 'same-origin',
+      }).then(function () { loadFeed(false); });
+    });
+    actionsDiv.appendChild(deleteButton);
+  }
   postDiv.appendChild(actionsDiv);
 
   const commentsDiv = document.createElement('div');

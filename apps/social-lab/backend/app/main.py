@@ -189,6 +189,9 @@ REFRESH_TOKEN_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "7"))
 REFRESH_TOKENS_ENABLED = os.getenv("REFRESH_TOKENS_ENABLED", "true").lower() == "true"
 
 
+OWNER_CHECK_ENABLED = os.getenv("OWNER_CHECK_ENABLED", "true").lower() == "true"
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "social-lab"}
@@ -455,6 +458,17 @@ def comment_post(post_id: str, data: CommentRequest, social_lab_session: str | N
     posts_collection.update_one({"_id": post["_id"]}, {"$push": {"comments": comment}})
     post = posts_collection.find_one({"_id": post["_id"]})
     return post_to_dict(post)
+
+
+@app.delete("/api/v1/posts/{post_id}")
+def delete_post(post_id: str, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
+    username = get_username_from_cookie(social_lab_session)
+    validate_csrf(csrf_token, x_csrf_token)
+    post = get_post_or_404(post_id)
+    if OWNER_CHECK_ENABLED and post.get("username") != username:
+        raise HTTPException(status_code=403, detail="not your post")
+    posts_collection.delete_one({"_id": post["_id"]})
+    return {"message": "post deleted", "id": post_id}
 
 
 @app.post("/api/v1/posts/{post_id}/view")
