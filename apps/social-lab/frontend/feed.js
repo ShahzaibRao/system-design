@@ -137,10 +137,26 @@ document.getElementById('logout-button').addEventListener('click', function () {
     credentials: 'same-origin',
   })
     .then(function (res) {
-      if (!res.ok) {
-        throw new Error('invalid session');
+      if (res.ok) {
+        return res.json();
       }
-      return res.json();
+      return fetch('/api/v1/auth/refresh', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': getCsrfToken() }
+      }).then(function (refreshRes) {
+        if (!refreshRes.ok) {
+          throw new Error('invalid session');
+        }
+        return fetch('/api/v1/auth/me', {
+          credentials: 'same-origin',
+        }).then(function (res2) {
+          if (!res2.ok) {
+            throw new Error('invalid session');
+          }
+          return res2.json();
+        });
+      });
     })
     .then(function (data) {
       currentUsername = data.username;

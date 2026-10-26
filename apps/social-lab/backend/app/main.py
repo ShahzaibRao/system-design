@@ -36,6 +36,12 @@ posts_collection.create_index([("created_at", -1)])
 sessions_collection = db["sessions"]
 sessions_collection.create_index("token_hash", unique=True)
 sessions_collection.create_index("expires_at", expireAfterSeconds=0)
+refresh_tokens_collection = db["refresh_tokens"]
+refresh_tokens_collection.create_index("token_hash", unique=True)
+refresh_tokens_collection.create_index("expires_at", expireAfterSeconds=0)
+used_refresh_tokens_collection = db["used_refresh_tokens"]
+used_refresh_tokens_collection.create_index("token_hash", unique=True)
+used_refresh_tokens_collection.create_index("expires_at", expireAfterSeconds=0)
 
 username_filter = BloomFilter(capacity=10000, error_rate=0.01)
 login_attempts = {}
@@ -167,6 +173,11 @@ def get_unique_views(post_id):
         return None
 
 
+ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("ACCESS_TOKEN_TTL_SECONDS", "900"))
+REFRESH_TOKEN_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "7"))
+REFRESH_TOKENS_ENABLED = os.getenv("REFRESH_TOKENS_ENABLED", "true").lower() == "true"
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "app": "social-lab"}
@@ -248,17 +259,18 @@ def login(data: LoginRequest, response: Response):
     LOGIN_TOTAL.labels(result="success").inc()
     token = secrets.token_hex(32)
     now = datetime.now(timezone.utc)
+    access_expires_at = now + timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS) if REFRESH_TOKENS_ENABLED else now + timedelta(hours=SESSION_EXPIRY_HOURS)
     sessions_collection.insert_one({
         "token_hash": hashlib.sha256(token.encode()).hexdigest(),
         "username": user["username"],
         "created_at": now,
-        "expires_at": now + timedelta(hours=SESSION_EXPIRY_HOURS),
+        "expires_at": access_expires_at,
     })
     response.set_cookie(
         key="social_lab_session",
         value=token,
         httponly=True,
-        max_age=24 * 60 * 60,
+        max_age=ACCESS_TOKEN_TTL_SECONDS if REFRESH_TOKENS_ENABLED else 24 * 60 * 60,
         path="/",
         samesite="lax",
         secure=False,  # localhost HTTP demo only, production must be True with HTTPS
@@ -268,11 +280,28 @@ def login(data: LoginRequest, response: Response):
         key="csrf_token",
         value=csrf_token,
         httponly=False,  # frontend JS must read it to send as header, it is not a session token
-        max_age=24 * 60 * 60,
+        max_age=REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 if REFRESH_TOKENS_ENABLED else 24 * 60 * 60,
         path="/",
         samesite="lax",
         secure=False,  # localhost HTTP demo only, production must be True with HTTPS
     )
+    if REFRESH_TOKENS_ENABLED:
+        refresh_token = secrets.token_hex(32)
+        refresh_tokens_collection.insert_one({
+            "token_hash": hashlib.sha256(refresh_token.encode()).hexdigest(),
+            "username": user["username"],
+            "created_at": now,
+            "expires_at": now + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+        })
+        response.set_cookie(
+            key="social_lab_refresh",
+            value=refresh_token,
+            httponly=True,
+            max_age=REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60,
+            path="/",
+            samesite="lax",
+            secure=False,  # localhost HTTP demo only, production must be True with HTTPS
+        )
     return {"message": "login successful", "username": user["username"]}
 
 
@@ -283,13 +312,83 @@ def me(social_lab_session: str | None = Cookie(None)):
 
 
 @app.post("/api/v1/auth/logout")
-def logout(response: Response, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
+def logout(response: Response, social_lab_session: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None), social_lab_refresh: str | None = Cookie(None)):
     if social_lab_session:
         validate_csrf(csrf_token, x_csrf_token)
         sessions_collection.delete_one({"token_hash": hashlib.sha256(social_lab_session.encode()).hexdigest()})
+    if social_lab_refresh:
+        refresh_tokens_collection.delete_one({"token_hash": hashlib.sha256(social_lab_refresh.encode()).hexdigest()})
     response.delete_cookie(key="social_lab_session", path="/")
     response.delete_cookie(key="csrf_token", path="/")
+    response.delete_cookie(key="social_lab_refresh", path="/")
     return {"message": "logged out"}
+
+
+@app.post("/api/v1/auth/refresh")
+def refresh(response: Response, social_lab_refresh: str | None = Cookie(None), csrf_token: str | None = Cookie(None), x_csrf_token: str | None = Header(None)):
+    if not REFRESH_TOKENS_ENABLED:
+        raise HTTPException(status_code=404, detail="refresh tokens disabled")
+    validate_csrf(csrf_token, x_csrf_token)
+    if not social_lab_refresh:
+        raise HTTPException(status_code=401, detail="invalid or expired refresh token")
+    refresh_hash = hashlib.sha256(social_lab_refresh.encode()).hexdigest()
+    used = used_refresh_tokens_collection.find_one({"token_hash": refresh_hash})
+    if used:
+        username = used["username"]
+        sessions_collection.delete_many({"username": username})
+        refresh_tokens_collection.delete_many({"username": username})
+        raise HTTPException(status_code=401, detail="refresh token reuse detected, all sessions revoked")
+    record = refresh_tokens_collection.find_one({"token_hash": refresh_hash})
+    if not record:
+        raise HTTPException(status_code=401, detail="invalid or expired refresh token")
+    expires_at = record.get("expires_at")
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at and datetime.now(timezone.utc) >= expires_at:
+        refresh_tokens_collection.delete_one({"token_hash": refresh_hash})
+        raise HTTPException(status_code=401, detail="invalid or expired refresh token")
+    username = record["username"]
+    now = datetime.now(timezone.utc)
+    used_refresh_tokens_collection.insert_one({
+        "token_hash": refresh_hash,
+        "username": username,
+        "created_at": now,
+        "expires_at": now + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+    })
+    refresh_tokens_collection.delete_one({"token_hash": refresh_hash})
+    token = secrets.token_hex(32)
+    sessions_collection.insert_one({
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "username": username,
+        "created_at": now,
+        "expires_at": now + timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS),
+    })
+    response.set_cookie(
+        key="social_lab_session",
+        value=token,
+        httponly=True,
+        max_age=ACCESS_TOKEN_TTL_SECONDS,
+        path="/",
+        samesite="lax",
+        secure=False,  # localhost HTTP demo only, production must be True with HTTPS
+    )
+    new_refresh_token = secrets.token_hex(32)
+    refresh_tokens_collection.insert_one({
+        "token_hash": hashlib.sha256(new_refresh_token.encode()).hexdigest(),
+        "username": username,
+        "created_at": now,
+        "expires_at": now + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+    })
+    response.set_cookie(
+        key="social_lab_refresh",
+        value=new_refresh_token,
+        httponly=True,
+        max_age=REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60,
+        path="/",
+        samesite="lax",
+        secure=False,  # localhost HTTP demo only, production must be True with HTTPS
+    )
+    return {"message": "refreshed", "username": username}
 
 
 @app.post("/api/v1/posts", status_code=201)
