@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import bcrypt
 from pymongo import MongoClient
+from pymongo.read_preferences import ReadPreference
 from pymongo.errors import DuplicateKeyError
 from bson import ObjectId
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -132,7 +133,7 @@ def get_post_or_404(post_id):
         object_id = ObjectId(post_id)
     except Exception:
         raise HTTPException(status_code=404, detail="post not found")
-    post = posts_collection.find_one({"_id": object_id})
+    post = posts_collection.with_options(read_preference=ReadPreference.PRIMARY).find_one({"_id": object_id})
     if not post:
         raise HTTPException(status_code=404, detail="post not found")
     return post
@@ -427,7 +428,7 @@ def create_post(data: PostCreate, social_lab_session: str | None = Cookie(None),
         "comments": [],
         "views": 0,
     })
-    post = posts_collection.find_one({"_id": result.inserted_id})
+    post = posts_collection.with_options(read_preference=ReadPreference.PRIMARY).find_one({"_id": result.inserted_id})
     invalidate_feed_cache()
     return post_to_dict(post)
 
@@ -508,7 +509,7 @@ def like_post(post_id: str, data: LikeRequest, social_lab_session: str | None = 
     post = get_post_or_404(post_id)
     if username not in post.get("liked_by", []):
         posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": username}})
-    post = posts_collection.find_one({"_id": post["_id"]})
+    post = posts_collection.with_options(read_preference=ReadPreference.PRIMARY).find_one({"_id": post["_id"]})
     invalidate_feed_cache()
     return post_to_dict(post)
 
@@ -526,7 +527,7 @@ def comment_post(post_id: str, data: CommentRequest, social_lab_session: str | N
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     posts_collection.update_one({"_id": post["_id"]}, {"$push": {"comments": comment}})
-    post = posts_collection.find_one({"_id": post["_id"]})
+    post = posts_collection.with_options(read_preference=ReadPreference.PRIMARY).find_one({"_id": post["_id"]})
     invalidate_feed_cache()
     return post_to_dict(post)
 
@@ -653,7 +654,7 @@ def view_post(post_id: str, social_lab_session: str | None = Cookie(None), csrf_
     post = get_post_or_404(post_id)
     posts_collection.update_one({"_id": post["_id"]}, {"$inc": {"views": 1}})
     track_unique_view(post_id, username)
-    post = posts_collection.find_one({"_id": post["_id"]})
+    post = posts_collection.with_options(read_preference=ReadPreference.PRIMARY).find_one({"_id": post["_id"]})
     result = post_to_dict(post)
     result["unique_views"] = get_unique_views(post_id) if UNIQUE_VIEWS_ENABLED else None
     return result

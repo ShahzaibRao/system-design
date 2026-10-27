@@ -29,6 +29,24 @@ services:
     command: ["--replSet", "rs0", "--wiredTigerCacheSizeGB", "0.25"]
     restart: unless-stopped
 
+  app:
+    build: .
+    container_name: social-lab-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/code/backend/app
+      - ./frontend:/code/frontend
+    environment:
+      - MONGO_URI=mongodb://social-lab-mongo:27017,social-lab-mongo2:27017,social-lab-mongo3:27017/?replicaSet=rs0&readPreference=secondaryPreferred
+      - REDIS_HOST=redis
+    depends_on:
+      - mongo
+      - mongo2
+      - mongo3
+      - redis
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: social-lab-prometheus
