@@ -47,6 +47,56 @@ services:
       - redis
     restart: unless-stopped
 
+  config:
+    image: mongo:7
+    container_name: social-lab-config
+    ports:
+      - "27020:27017"
+    volumes:
+      - config_data:/data/db
+    command: ["--configsvr", "--port", "27017", "--dbpath", "/data/db", "--replSet", "configrs", "--wiredTigerCacheSizeGB", "0.25"]
+    restart: unless-stopped
+
+  shard1:
+    image: mongo:7
+    container_name: social-lab-shard1
+    ports:
+      - "27021:27017"
+    volumes:
+      - shard1_data:/data/db
+    command: ["--shardsvr", "--port", "27017", "--dbpath", "/data/db", "--replSet", "shard1rs", "--wiredTigerCacheSizeGB", "0.25"]
+    restart: unless-stopped
+
+  shard2:
+    image: mongo:7
+    container_name: social-lab-shard2
+    ports:
+      - "27022:27017"
+    volumes:
+      - shard2_data:/data/db
+    command: ["--shardsvr", "--port", "27017", "--dbpath", "/data/db", "--replSet", "shard2rs", "--wiredTigerCacheSizeGB", "0.25"]
+    restart: unless-stopped
+
+  shard3:
+    image: mongo:7
+    container_name: social-lab-shard3
+    ports:
+      - "27023:27017"
+    volumes:
+      - shard3_data:/data/db
+    command: ["--shardsvr", "--port", "27017", "--dbpath", "/data/db", "--replSet", "shard3rs", "--wiredTigerCacheSizeGB", "0.25"]
+    restart: unless-stopped
+
+  mongos:
+    image: mongo:7
+    container_name: social-lab-mongos
+    ports:
+      - "27024:27017"
+    command: ["mongos", "--configdb", "configrs/social-lab-config:27017", "--bind_ip_all"]
+    depends_on:
+      - config
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: social-lab-prometheus
@@ -92,3 +142,7 @@ volumes:
   prometheus_data:
   grafana_data:
   redis_data:
+  config_data:
+  shard1_data:
+  shard2_data:
+  shard3_data:
