@@ -4,3 +4,4 @@ bcrypt
 pymongo
 prometheus-client
 redis
+kafka-python-ng==2.2.2

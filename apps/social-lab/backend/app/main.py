@@ -2,6 +2,7 @@ import os
 import hashlib
 import json
 import redis
+from kafka import KafkaProducer
 import hmac
 import secrets
 import threading
@@ -27,6 +28,20 @@ CSP_POLICY = "default-src 'self'; script-src 'self'; style-src 'self'; connect-s
 FEED_CACHE_ENABLED = os.environ.get("FEED_CACHE_ENABLED", "true").lower() == "true"
 FEED_CACHE_TTL_SECONDS = int(os.environ.get("FEED_CACHE_TTL_SECONDS", "60"))
 FOLLOW_ENABLED = os.environ.get("FOLLOW_ENABLED", "true").lower() == "true"
+KAFKA_LIKES_ENABLED = os.environ.get("KAFKA_LIKES_ENABLED", "false").lower() == "true"
+KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_LIKES_TOPIC = "post-likes"
+_kafka_producer = None
+
+
+def get_kafka_producer():
+    global _kafka_producer
+    if _kafka_producer is None:
+        _kafka_producer = KafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        )
+    return _kafka_producer
 
 
 @app.middleware("http")
@@ -507,6 +522,15 @@ def like_post(post_id: str, data: LikeRequest, social_lab_session: str | None = 
     username = get_username_from_cookie(social_lab_session)
     validate_csrf(csrf_token, x_csrf_token)
     post = get_post_or_404(post_id)
+    if KAFKA_LIKES_ENABLED:
+        # Async path: publish the event and return immediately. The consumer
+        # applies the like to Mongo, so likes_count here is the pre-like value
+        # (eventual consistency) -- it catches up once the consumer drains.
+        # Fire-and-forget: lowest latency, but a broker outage would drop the
+        # event silently; production would use acks=all + send().get(timeout)
+        # with a retry/dead-letter path.
+        get_kafka_producer().send(KAFKA_LIKES_TOPIC, {"post_id": str(post["_id"]), "username": username})
+        return post_to_dict(post)
     if username not in post.get("liked_by", []):
         posts_collection.update_one({"_id": post["_id"]}, {"$push": {"liked_by": username}})
     post = posts_collection.with_options(read_preference=ReadPreference.PRIMARY).find_one({"_id": post["_id"]})
